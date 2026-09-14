@@ -155,9 +155,25 @@ function DeviceSelector() {
         aria-valuemin={0}
         aria-valuemax={1}
         aria-valuenow={level}
+        style={{
+          width: '200px',
+          height: '12px',
+          border: '1px solid #888',
+          borderRadius: '4px',
+          overflow: 'hidden',
+          background: '#e0e0e0',
+        }}
       >
-        <div style={{ width: `${Math.min(level, 1) * 100}%` }} />
+        <div
+          style={{
+            width: `${Math.min(level, 1) * 100}%`,
+            height: '100%',
+            background: '#396cd8',
+            transition: 'width 0.05s linear',
+          }}
+        />
       </div>
+      <p>入力レベル: {level.toFixed(3)}</p>
     </section>
   )
 }
