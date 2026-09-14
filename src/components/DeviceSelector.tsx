@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { InputDeviceInfo } from '../types/audio'
+import { rmsToMeterRatio } from '../lib/meterScale'
 
 /** `audio://level` イベントのペイロードです。 */
 interface AudioLevelPayload {
@@ -166,7 +167,7 @@ function DeviceSelector() {
       >
         <div
           style={{
-            width: `${Math.min(level, 1) * 100}%`,
+            width: `${rmsToMeterRatio(level) * 100}%`,
             height: '100%',
             background: '#396cd8',
             transition: 'width 0.05s linear',
