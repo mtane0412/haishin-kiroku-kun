@@ -23,8 +23,11 @@ function toErrorMessage(error: unknown): string {
 
 function DeviceSelector() {
   const [devices, setDevices] = useState<InputDeviceInfo[]>([])
-  const [selectedDevice, setSelectedDevice] = useState('')
+  const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [isCapturing, setIsCapturing] = useState(false)
+  // start_audio_capture / stop_audio_capture の応答待ち中かどうかです。
+  // 応答が返るまで操作系UIを無効化し、二重呼び出しを防ぎます。
+  const [isPending, setIsPending] = useState(false)
   const [level, setLevel] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
@@ -39,7 +42,7 @@ function DeviceSelector() {
         setDevices(result)
         const defaultDevice = result.find((d) => d.isDefault) ?? result[0]
         if (defaultDevice) {
-          setSelectedDevice(defaultDevice.name)
+          setSelectedDeviceId(defaultDevice.id)
         }
         setError(null)
       })
@@ -79,16 +82,26 @@ function DeviceSelector() {
   }, [])
 
   async function handleStart() {
+    if (isPending) {
+      return
+    }
+    setIsPending(true)
     try {
-      await invoke('start_audio_capture', { deviceName: selectedDevice })
+      await invoke('start_audio_capture', { deviceId: selectedDeviceId })
       setIsCapturing(true)
       setError(null)
     } catch (e) {
       setError(toErrorMessage(e))
+    } finally {
+      setIsPending(false)
     }
   }
 
   async function handleStop() {
+    if (isPending) {
+      return
+    }
+    setIsPending(true)
     try {
       await invoke('stop_audio_capture')
       setIsCapturing(false)
@@ -96,6 +109,8 @@ function DeviceSelector() {
       setError(null)
     } catch (e) {
       setError(toErrorMessage(e))
+    } finally {
+      setIsPending(false)
     }
   }
 
@@ -108,12 +123,12 @@ function DeviceSelector() {
       <label htmlFor="input-device-select">入力デバイス</label>
       <select
         id="input-device-select"
-        value={selectedDevice}
-        onChange={(e) => setSelectedDevice(e.currentTarget.value)}
-        disabled={isCapturing}
+        value={selectedDeviceId}
+        onChange={(e) => setSelectedDeviceId(e.currentTarget.value)}
+        disabled={isCapturing || isPending}
       >
         {devices.map((device) => (
-          <option key={device.name} value={device.name}>
+          <option key={device.id} value={device.id}>
             {device.name}
             {device.isDefault ? '（既定）' : ''}
           </option>
@@ -121,11 +136,15 @@ function DeviceSelector() {
       </select>
 
       {isCapturing ? (
-        <button type="button" onClick={() => void handleStop()}>
+        <button type="button" onClick={() => void handleStop()} disabled={isPending}>
           キャプチャ停止
         </button>
       ) : (
-        <button type="button" onClick={() => void handleStart()} disabled={!selectedDevice}>
+        <button
+          type="button"
+          onClick={() => void handleStart()}
+          disabled={!selectedDeviceId || isPending}
+        >
           キャプチャ開始
         </button>
       )}

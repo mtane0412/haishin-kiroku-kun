@@ -3,14 +3,18 @@
 //! `cpal` の共有モード（排他モードは使用しない）でホストのデフォルト入力APIから
 //! 列挙するため、OBS等の他アプリケーションが同一デバイスを使用中でも取得できます。
 
-use cpal::traits::HostTrait;
+use cpal::traits::{DeviceTrait, HostTrait};
 use serde::Serialize;
 
 /// UIに表示する入力デバイス情報です。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputDeviceInfo {
-    /// デバイス名。`start_audio_capture` コマンドへの指定にそのまま使用します。
+    /// デバイスの一意な識別子（`cpal::DeviceId` の文字列表現）。
+    /// `start_audio_capture` コマンドへの指定にはこちらを使用します
+    /// （デバイス名は同名の複数デバイスが存在しうるため、識別には使用しません）。
+    pub id: String,
+    /// UI表示用のデバイス名。
     pub name: String,
     /// OS既定の入力デバイスかどうか。
     pub is_default: bool,
@@ -23,14 +27,18 @@ pub struct InputDeviceInfo {
 /// UI表示に必須のため、確実に取得できる `Display` を使用しています。
 pub fn list_input_devices() -> Result<Vec<InputDeviceInfo>, String> {
     let host = cpal::default_host();
-    let default_name = host.default_input_device().map(|d| d.to_string());
+    let default_id = host
+        .default_input_device()
+        .and_then(|d| d.id().ok())
+        .map(|id| id.to_string());
 
     let devices = host.input_devices().map_err(|e| e.to_string())?;
-    Ok(devices
+    devices
         .map(|device| {
+            let id = device.id().map_err(|e| e.to_string())?.to_string();
             let name = device.to_string();
-            let is_default = default_name.as_deref() == Some(name.as_str());
-            InputDeviceInfo { name, is_default }
+            let is_default = default_id.as_deref() == Some(id.as_str());
+            Ok(InputDeviceInfo { id, name, is_default })
         })
-        .collect())
+        .collect()
 }

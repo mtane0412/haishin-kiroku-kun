@@ -6,7 +6,12 @@
 
 /** マイク入力デバイスです。 */
 export interface InputDeviceInfo {
-  /** デバイス名。`start_audio_capture` コマンドの `deviceName` 引数にそのまま使用する */
+  /**
+   * デバイスの一意な識別子。`start_audio_capture` コマンドの `deviceId` 引数に使用する。
+   * デバイス名は同名の複数デバイスが存在しうるため、識別には `id` を使用する。
+   */
+  id: string;
+  /** UI表示用のデバイス名 */
   name: string;
   /** OS既定の入力デバイスかどうか */
   isDefault: boolean;

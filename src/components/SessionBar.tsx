@@ -31,6 +31,9 @@ function SessionBar() {
   // 取得結果が後から届いて新しく開始したセッションの表示を上書きしてしまう恐れがあるため、
   // 完了するまで開始フォームの表示を待ちます。
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false)
+  // start_session / end_session の応答待ち中かどうかです。
+  // 応答が返るまでボタンを無効化し、二重送信を防ぎます。
+  const [isPending, setIsPending] = useState(false)
 
   const activeSession = sessions.find((session) => session.endedAt === null) ?? null
 
@@ -62,6 +65,10 @@ function SessionBar() {
 
   async function handleStart(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (isPending) {
+      return
+    }
+    setIsPending(true)
     try {
       const created = await invoke<Session>('start_session', { title })
       setSessions((prev) => [created, ...prev])
@@ -69,19 +76,24 @@ function SessionBar() {
       setError(null)
     } catch (e) {
       setError(toErrorMessage(e))
+    } finally {
+      setIsPending(false)
     }
   }
 
   async function handleEnd() {
-    if (!activeSession) {
+    if (!activeSession || isPending) {
       return
     }
+    setIsPending(true)
     try {
       const ended = await invoke<Session>('end_session', { sessionId: activeSession.id })
       setSessions((prev) => prev.map((session) => (session.id === ended.id ? ended : session)))
       setError(null)
     } catch (e) {
       setError(toErrorMessage(e))
+    } finally {
+      setIsPending(false)
     }
   }
 
@@ -96,7 +108,7 @@ function SessionBar() {
           <p>
             配信中: {activeSession.title}（開始: {formatDateTime(activeSession.startedAt)}）
           </p>
-          <button type="button" onClick={() => void handleEnd()}>
+          <button type="button" onClick={() => void handleEnd()} disabled={isPending}>
             配信を終了
           </button>
         </section>
@@ -109,7 +121,9 @@ function SessionBar() {
             onChange={(e) => setTitle(e.currentTarget.value)}
             placeholder="配信タイトルを入力"
           />
-          <button type="submit">配信を開始</button>
+          <button type="submit" disabled={isPending}>
+            配信を開始
+          </button>
         </form>
       ) : (
         <p>読み込み中...</p>

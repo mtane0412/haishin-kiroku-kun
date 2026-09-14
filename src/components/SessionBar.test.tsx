@@ -65,6 +65,36 @@ describe('SessionBar', () => {
     expect(mockedInvoke).toHaveBeenCalledWith('start_session', { title: '雑談配信' })
   })
 
+  it('start_session の応答待ち中は開始ボタンが無効化され、二重送信されない', async () => {
+    const user = userEvent.setup()
+    let resolveStart: ((session: Session) => void) | undefined
+    mockedInvoke.mockImplementation(async (cmd) => {
+      if (cmd === 'list_sessions') {
+        return []
+      }
+      if (cmd === 'start_session') {
+        return new Promise<Session>((resolve) => {
+          resolveStart = resolve
+        })
+      }
+      throw new Error(`予期しないコマンド: ${cmd}`)
+    })
+
+    render(<SessionBar />)
+
+    await user.type(await screen.findByLabelText('セッションタイトル'), '雑談配信')
+    const startButton = screen.getByRole('button', { name: '配信を開始' })
+    await user.click(startButton)
+
+    // 応答が返るまでボタンは無効化され、再クリックしても呼び出し回数は増えない
+    expect(startButton).toBeDisabled()
+    await user.click(startButton)
+    expect(mockedInvoke).toHaveBeenCalledTimes(2) // list_sessions + start_session の1回のみ
+
+    resolveStart?.(進行中セッション)
+    expect(await screen.findByRole('button', { name: '配信を終了' })).toBeInTheDocument()
+  })
+
   it('終了ボタンを押すと end_session が呼ばれ、一覧の表示が進行中から終了時刻に変わる', async () => {
     const user = userEvent.setup()
     const 終了後セッション: Session = { ...進行中セッション, endedAt: 1_700_000_100_000 }
@@ -87,6 +117,34 @@ describe('SessionBar', () => {
 
     await waitFor(() => expect(within(list).queryByText(/進行中/)).not.toBeInTheDocument())
     expect(mockedInvoke).toHaveBeenCalledWith('end_session', { sessionId: 'session-1' })
+  })
+
+  it('end_session の応答待ち中は終了ボタンが無効化され、二重送信されない', async () => {
+    const user = userEvent.setup()
+    let resolveEnd: ((session: Session) => void) | undefined
+    mockedInvoke.mockImplementation(async (cmd) => {
+      if (cmd === 'list_sessions') {
+        return [進行中セッション]
+      }
+      if (cmd === 'end_session') {
+        return new Promise<Session>((resolve) => {
+          resolveEnd = resolve
+        })
+      }
+      throw new Error(`予期しないコマンド: ${cmd}`)
+    })
+
+    render(<SessionBar />)
+
+    const endButton = await screen.findByRole('button', { name: '配信を終了' })
+    await user.click(endButton)
+
+    expect(endButton).toBeDisabled()
+    await user.click(endButton)
+    expect(mockedInvoke).toHaveBeenCalledTimes(2) // list_sessions + end_session の1回のみ
+
+    resolveEnd?.({ ...進行中セッション, endedAt: 1_700_000_100_000 })
+    await waitFor(() => expect(screen.queryByRole('button', { name: '配信を終了' })).not.toBeInTheDocument())
   })
 
   it('invoke が失敗した場合にエラーメッセージが表示される', async () => {

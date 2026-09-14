@@ -33,11 +33,11 @@ pub fn list_input_devices() -> Result<Vec<InputDeviceInfo>, String> {
 pub fn start_audio_capture(
     state: State<'_, AudioState>,
     app_handle: AppHandle,
-    device_name: String,
+    device_id: String,
 ) -> Result<(), String> {
     let mut capture = state.capture.lock().map_err(|e| e.to_string())?;
     capture
-        .start(&device_name, app_handle)
+        .start(&device_id, app_handle)
         .map_err(|e| e.to_string())
 }
 

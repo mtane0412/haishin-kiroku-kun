@@ -92,16 +92,21 @@ impl AudioCapture {
         self.sender.subscribe()
     }
 
-    /// 指定した名前の入力デバイスからキャプチャを開始します。既に開始済みの場合は
+    /// 指定したIDの入力デバイスからキャプチャを開始します。既に開始済みの場合は
     /// 一旦停止してから再開します。
-    pub fn start(&mut self, device_name: &str, app_handle: AppHandle) -> Result<(), AudioError> {
+    ///
+    /// デバイス名ではなく `cpal::DeviceId`（の文字列表現）で指定します。同名の
+    /// デバイスが複数存在する環境でも一意にデバイスを特定するためです。
+    pub fn start(&mut self, device_id: &str, app_handle: AppHandle) -> Result<(), AudioError> {
         self.stop();
 
         let host = cpal::default_host();
+        let parsed_id: cpal::DeviceId = device_id
+            .parse()
+            .map_err(|_| AudioError::DeviceNotFound(device_id.to_string()))?;
         let device = host
-            .input_devices()?
-            .find(|d| d.to_string() == device_name)
-            .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()))?;
+            .device_by_id(&parsed_id)
+            .ok_or_else(|| AudioError::DeviceNotFound(device_id.to_string()))?;
 
         let config = device.default_input_config()?;
         let sample_format = config.sample_format();
