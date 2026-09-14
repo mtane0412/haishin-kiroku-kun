@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS 向けの追加 Info.plist エントリです。Tauri のビルド時に自動生成される
+  Info.plist へマージされます。マイク入力を cpal でキャプチャするため、
+  NSMicrophoneUsageDescription（マイク使用許可ダイアログの説明文）が必須です。
+-->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>配信の音声をリアルタイムで文字起こしするためにマイクへアクセスします。</string>
+</dict>
+</plist>
