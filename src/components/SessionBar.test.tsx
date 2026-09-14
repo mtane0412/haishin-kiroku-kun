@@ -57,8 +57,8 @@ describe('SessionBar', () => {
 
     render(<SessionBar />)
 
-    await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith('list_sessions', { limit: 20 }))
-    await user.type(screen.getByLabelText('セッションタイトル'), '雑談配信')
+    // 初回のセッション一覧取得が完了し開始フォームが表示されるまで待つ
+    await user.type(await screen.findByLabelText('セッションタイトル'), '雑談配信')
     await user.click(screen.getByRole('button', { name: '配信を開始' }))
 
     expect(await screen.findByRole('button', { name: '配信を終了' })).toBeInTheDocument()

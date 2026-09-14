@@ -98,6 +98,9 @@ pub struct ChatMessage {
 }
 
 /// 新しいセッションを作成します。ID は UUID v4 で採番します。
+///
+/// `title` は前後の空白を除去した上で保存します。トリム後に空文字列となる場合
+/// （空、または空白文字のみの入力）は [`StoreError::BlankTitle`] を返します（Fail-Fast）。
 pub fn create_session(
     conn: &Connection,
     title: &str,
@@ -105,15 +108,20 @@ pub fn create_session(
     engine: &str,
     started_at: i64,
 ) -> Result<Session> {
+    let trimmed_title = title.trim();
+    if trimmed_title.is_empty() {
+        return Err(StoreError::BlankTitle);
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO sessions (id, title, started_at, ended_at, twitch_channel, engine)
          VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
-        params![id, title, started_at, twitch_channel, engine],
+        params![id, trimmed_title, started_at, twitch_channel, engine],
     )?;
     Ok(Session {
         id,
-        title: title.to_string(),
+        title: trimmed_title.to_string(),
         started_at,
         ended_at: None,
         twitch_channel: twitch_channel.map(str::to_string),
@@ -320,6 +328,20 @@ mod tests {
         let fetched = get_session(&conn, &created.id).unwrap();
 
         assert_eq!(fetched, Some(created));
+    }
+
+    #[test]
+    fn セッション作成時にタイトルの前後の空白は除去される() {
+        let conn = open_in_memory().unwrap();
+        let created = create_session(&conn, "  雑談配信  ", None, "whisper-local", 1_000).unwrap();
+        assert_eq!(created.title, "雑談配信");
+    }
+
+    #[test]
+    fn 空白のみのタイトルでのセッション作成はエラーになる() {
+        let conn = open_in_memory().unwrap();
+        let result = create_session(&conn, "   ", None, "whisper-local", 1_000);
+        assert!(matches!(result, Err(StoreError::BlankTitle)));
     }
 
     #[test]

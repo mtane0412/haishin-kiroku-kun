@@ -27,6 +27,10 @@ function SessionBar() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [title, setTitle] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // 初回のセッション一覧取得が完了したかどうかです。完了前に開始フォームを表示すると、
+  // 取得結果が後から届いて新しく開始したセッションの表示を上書きしてしまう恐れがあるため、
+  // 完了するまで開始フォームの表示を待ちます。
+  const [isInitialLoadDone, setIsInitialLoadDone] = useState(false)
 
   const activeSession = sessions.find((session) => session.endedAt === null) ?? null
 
@@ -44,6 +48,11 @@ function SessionBar() {
       .catch((e: unknown) => {
         if (!ignore) {
           setError(toErrorMessage(e))
+        }
+      })
+      .finally(() => {
+        if (!ignore) {
+          setIsInitialLoadDone(true)
         }
       })
     return () => {
@@ -91,7 +100,7 @@ function SessionBar() {
             配信を終了
           </button>
         </section>
-      ) : (
+      ) : isInitialLoadDone ? (
         <form onSubmit={(e) => void handleStart(e)}>
           <label htmlFor="session-title">セッションタイトル</label>
           <input
@@ -102,6 +111,8 @@ function SessionBar() {
           />
           <button type="submit">配信を開始</button>
         </form>
+      ) : (
+        <p>読み込み中...</p>
       )}
 
       <h2>セッション一覧</h2>
