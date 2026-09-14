@@ -4,11 +4,13 @@
 //! `AppState` として登録した上で、フロントエンドから呼び出される
 //! `#[tauri::command]` 群を登録してイベントループを開始します。
 
+mod audio;
 mod commands;
 mod store;
 
 use std::sync::Mutex;
 
+use commands::audio::{AudioState, list_input_devices, start_audio_capture, stop_audio_capture};
 use commands::session::{AppState, end_session, list_sessions, start_session};
 use tauri::Manager;
 
@@ -30,12 +32,16 @@ pub fn run() {
             app.manage(AppState {
                 db: Mutex::new(conn),
             });
+            app.manage(AudioState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             start_session,
             end_session,
-            list_sessions
+            list_sessions,
+            list_input_devices,
+            start_audio_capture,
+            stop_audio_capture
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
