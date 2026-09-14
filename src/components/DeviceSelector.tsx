@@ -3,7 +3,7 @@
  * Rust 側の `list_input_devices` / `start_audio_capture` / `stop_audio_capture` コマンドを
  * `invoke` で呼び出し、`audio://level` イベントを購読してRMSレベルを表示します。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { InputDeviceInfo } from '../types/audio'
@@ -31,6 +31,11 @@ function DeviceSelector() {
   const [isPending, setIsPending] = useState(false)
   const [level, setLevel] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // audio://level イベントの直近値を保持するrefです。イベント受信のたびに直接setLevelすると
+  // 音声コールバック頻度（数十〜百Hz）でReactの再描画が追いつかずラグ・更新停滞が
+  // 発生しうるため、値はrefにためておき、下のrequestAnimationFrameループで
+  // 描画フレームごとにまとめて反映します。
+  const levelRef = useRef(0)
 
   // マウント時にデバイス一覧を取得し、既定デバイスを初期選択します。
   useEffect(() => {
@@ -57,12 +62,13 @@ function DeviceSelector() {
     }
   }, [])
 
-  // レベルメータ用にRMSイベントを購読します。
+  // レベルメータ用にRMSイベントを購読します。値はrefに保持するのみで、
+  // Reactのstate更新（再描画）は行いません。
   useEffect(() => {
     let unlisten: (() => void) | undefined
     let ignore = false
     listen<AudioLevelPayload>('audio://level', (event) => {
-      setLevel(event.payload.rms)
+      levelRef.current = event.payload.rms
     })
       .then((fn) => {
         if (ignore) {
@@ -80,6 +86,19 @@ function DeviceSelector() {
       ignore = true
       unlisten?.()
     }
+  }, [])
+
+  // levelRefの最新値を、ブラウザの描画タイミング（requestAnimationFrame）に同期して
+  // Reactのstateへ反映します。描画フレームごとに最新値だけを反映することで、
+  // 高頻度イベントによる描画の詰まり・ラグを避けます。
+  useEffect(() => {
+    let rafId: number
+    function tick() {
+      setLevel((prev) => (prev === levelRef.current ? prev : levelRef.current))
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
   }, [])
 
   async function handleStart() {
@@ -106,6 +125,7 @@ function DeviceSelector() {
     try {
       await invoke('stop_audio_capture')
       setIsCapturing(false)
+      levelRef.current = 0
       setLevel(0)
       setError(null)
     } catch (e) {
