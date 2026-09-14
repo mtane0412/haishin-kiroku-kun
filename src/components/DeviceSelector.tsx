@@ -187,10 +187,11 @@ function DeviceSelector() {
       >
         <div
           style={{
-            width: `${rmsToMeterRatio(level) * 100}%`,
+            width: '100%',
             height: '100%',
             background: '#396cd8',
-            transition: 'width 0.05s linear',
+            transformOrigin: 'left',
+            transform: `scaleX(${rmsToMeterRatio(level)})`,
           }}
         />
       </div>
