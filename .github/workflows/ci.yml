@@ -1,4 +1,4 @@
-# mic-app の CI ワークフローです。macOS / Windows のマトリクスで
+# haishin-kiroku-kun の CI ワークフローです。macOS / Windows のマトリクスで
 # フロントエンド（lint・型チェック・テスト）と Rust（test・clippy）を検証します。
 # OBS とのマイク共存など実機・手動確認が必要な項目はこの CI ではカバーせず、
 # 計画書（win-mac-tauri-ai-mic-obs-linked-coral.md）の手動 E2E 手順で確認します。

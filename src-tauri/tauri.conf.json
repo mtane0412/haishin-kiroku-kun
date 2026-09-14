@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mic-app",
+  "productName": "haishin-kiroku-kun",
   "version": "0.1.0",
-  "identifier": "com.mtane0412.mic-app",
+  "identifier": "com.mtane0412.haishin-kiroku-kun",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "mic-app",
+        "title": "haishin-kiroku-kun",
         "width": 800,
         "height": 600
       }

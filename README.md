@@ -1,4 +1,4 @@
-# mic-app
+# haishin-kiroku-kun
 
 配信者と AI エージェントをつなぐデスクトップアプリです（Tauri v2 / Windows・macOS 対応）。
 
