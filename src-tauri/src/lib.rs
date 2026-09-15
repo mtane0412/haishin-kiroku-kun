@@ -7,11 +7,15 @@
 mod audio;
 mod commands;
 mod store;
+mod transcribe;
 
 use std::sync::Mutex;
 
-use commands::audio::{AudioState, list_input_devices, start_audio_capture, stop_audio_capture};
-use commands::session::{AppState, end_session, list_sessions, start_session};
+use commands::audio::{list_input_devices, start_audio_capture, stop_audio_capture, AudioState};
+use commands::session::{end_session, list_sessions, start_session, AppState};
+use commands::transcribe::{
+    set_whisper_model_path, start_transcription, stop_transcription, TranscribeState,
+};
 use tauri::Manager;
 
 /// DB ファイル名です。`app_data_dir()` 配下に配置します。
@@ -33,6 +37,7 @@ pub fn run() {
                 db: Mutex::new(conn),
             });
             app.manage(AudioState::default());
+            app.manage(TranscribeState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,7 +46,10 @@ pub fn run() {
             list_sessions,
             list_input_devices,
             start_audio_capture,
-            stop_audio_capture
+            stop_audio_capture,
+            set_whisper_model_path,
+            start_transcription,
+            stop_transcription
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
