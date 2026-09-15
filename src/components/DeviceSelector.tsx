@@ -91,7 +91,11 @@ function DeviceSelector() {
   // levelRefの最新値を、ブラウザの描画タイミング（requestAnimationFrame）に同期して
   // Reactのstateへ反映します。描画フレームごとに最新値だけを反映することで、
   // 高頻度イベントによる描画の詰まり・ラグを避けます。
+  // キャプチャ中のみループを回し、停止中は不要なrAF呼び出しを避けます。
   useEffect(() => {
+    if (!isCapturing) {
+      return
+    }
     let rafId: number
     function tick() {
       setLevel((prev) => (prev === levelRef.current ? prev : levelRef.current))
@@ -99,7 +103,7 @@ function DeviceSelector() {
     }
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [])
+  }, [isCapturing])
 
   async function handleStart() {
     if (isPending) {

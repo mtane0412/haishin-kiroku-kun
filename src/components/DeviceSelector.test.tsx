@@ -127,6 +127,9 @@ describe('DeviceSelector', () => {
   })
 
   it('audio://level イベントを受信するとレベルメータの値が更新される', async () => {
+    // 描画ループ（requestAnimationFrame）はキャプチャ中のみ動作するため、
+    // 事前にキャプチャを開始しておく。
+    const user = userEvent.setup()
     let levelHandler: ((event: { payload: { rms: number } }) => void) | undefined
     mockedListen.mockImplementation(async (eventName, handler) => {
       if (eventName === 'audio://level') {
@@ -138,11 +141,15 @@ describe('DeviceSelector', () => {
       if (cmd === 'list_input_devices') {
         return デバイス一覧
       }
+      if (cmd === 'start_audio_capture') {
+        return undefined
+      }
       throw new Error(`予期しないコマンド: ${cmd}`)
     })
 
     render(<DeviceSelector />)
-    await screen.findByLabelText('入力デバイス')
+    await user.click(await screen.findByRole('button', { name: 'キャプチャ開始' }))
+    await screen.findByRole('button', { name: 'キャプチャ停止' })
 
     await waitFor(() => expect(levelHandler).toBeDefined())
     levelHandler?.({ payload: { rms: 0.42 } })
@@ -155,6 +162,7 @@ describe('DeviceSelector', () => {
     // requestAnimationFrame を手動制御し、「イベント受信＝即setState」ではなく
     // 「受信値はrefに保持し、描画フレームごとにまとめて反映する」実装になっている
     // ことを検証する（高頻度イベントによる描画の詰まり・ラグを防ぐための設計）。
+    // 描画ループはキャプチャ中のみ動作するため、事前にキャプチャを開始しておく。
     const rafCallbacks: FrameRequestCallback[] = []
     const rafSpy = vi.fn((cb: FrameRequestCallback) => {
       rafCallbacks.push(cb)
@@ -163,6 +171,7 @@ describe('DeviceSelector', () => {
     vi.stubGlobal('requestAnimationFrame', rafSpy)
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
+    const user = userEvent.setup()
     let levelHandler: ((event: { payload: { rms: number } }) => void) | undefined
     mockedListen.mockImplementation(async (eventName, handler) => {
       if (eventName === 'audio://level') {
@@ -174,12 +183,16 @@ describe('DeviceSelector', () => {
       if (cmd === 'list_input_devices') {
         return デバイス一覧
       }
+      if (cmd === 'start_audio_capture') {
+        return undefined
+      }
       throw new Error(`予期しないコマンド: ${cmd}`)
     })
 
     try {
       render(<DeviceSelector />)
-      await screen.findByLabelText('入力デバイス')
+      await user.click(await screen.findByRole('button', { name: 'キャプチャ開始' }))
+      await screen.findByRole('button', { name: 'キャプチャ停止' })
       await waitFor(() => expect(levelHandler).toBeDefined())
       await waitFor(() => expect(rafCallbacks.length).toBeGreaterThan(0))
 
