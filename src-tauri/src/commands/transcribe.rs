@@ -75,7 +75,12 @@ pub async fn start_transcription(
 
     {
         let mut runner = transcribe_state.runner.lock().await;
-        runner.switch_to(engine, audio_rx, out_tx).await;
+        // switch_to はエンジンの初期化（モデル検証・ロード）完了を待ってから返るため、
+        // ここで得られる結果でモデル未設定・不存在等の初期化失敗を同期的に検知できる。
+        runner
+            .switch_to(engine, audio_rx, out_tx)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     tokio::spawn(async move {

@@ -5,9 +5,10 @@
 //! 音声を消費する前に `run` が即座にエラーを返します（Fail-Fast）。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{TranscribeError, TranscriptEvent, TranscriptionEngine};
@@ -52,9 +53,22 @@ impl TranscriptionEngine for WhisperLocalEngine {
         mut audio: broadcast::Receiver<AudioFrame>,
         out: mpsc::Sender<TranscriptEvent>,
         cancel: CancellationToken,
+        ready: oneshot::Sender<Result<(), TranscribeError>>,
     ) -> Result<(), TranscribeError> {
-        let model_path = self.validate_model_path()?.clone();
-        let ctx = load_context(&model_path)?;
+        let ctx = match self
+            .validate_model_path()
+            .cloned()
+            .and_then(|model_path| load_context(&model_path))
+        {
+            Ok(ctx) => Arc::new(ctx),
+            Err(e) => {
+                let _ = ready.send(Err(e.clone()));
+                return Err(e);
+            }
+        };
+        // モデルロードまで完了したので、呼び出し元（EngineRunner::switch_to）へ
+        // 初期化成功を通知する。以降は音声受信・文字起こしのメインループに入る。
+        let _ = ready.send(Ok(()));
 
         let mut segmenter = crate::audio::vad::VadSegmenter::new(crate::audio::vad::VadConfig {
             sample_rate: crate::audio::resample::TARGET_SAMPLE_RATE,
@@ -72,7 +86,16 @@ impl TranscriptionEngine for WhisperLocalEngine {
                     };
 
                     for segment in segmenter.push(&frame.samples) {
-                        let text = transcribe_segment(&ctx, &segment.samples)?;
+                        // whisper推論はCPUバウンドな同期処理のため、tokioのワーカースレッドを
+                        // 占有しないよう spawn_blocking 専用スレッドで実行する。
+                        let ctx = Arc::clone(&ctx);
+                        let samples = segment.samples;
+                        let text = tokio::task::spawn_blocking(move || {
+                            transcribe_segment(&ctx, &samples)
+                        })
+                        .await
+                        .map_err(|e| TranscribeError::Runtime(e.to_string()))??;
+
                         let event = TranscriptEvent {
                             segment_id: uuid::Uuid::new_v4().to_string(),
                             start_ms: segment.start_ms,
@@ -142,12 +165,19 @@ mod tests {
         let (_audio_tx, audio_rx) = broadcast::channel(4);
         let (out_tx, _out_rx) = mpsc::channel(4);
         let cancel = CancellationToken::new();
+        let (ready_tx, ready_rx) = oneshot::channel();
 
-        let result = engine.run(audio_rx, out_tx, cancel).await;
+        let result = engine.run(audio_rx, out_tx, cancel, ready_tx).await;
 
         assert!(matches!(
             result,
             Err(TranscribeError::ModelNotConfigured(_))
+        ));
+        // readyにも同じエラーが即座に通知されること（EngineRunner::switch_toが
+        // この通知を待って初期化失敗を呼び出し元へ伝播するため）。
+        assert!(matches!(
+            ready_rx.await,
+            Ok(Err(TranscribeError::ModelNotConfigured(_)))
         ));
     }
 
@@ -157,10 +187,15 @@ mod tests {
         let (_audio_tx, audio_rx) = broadcast::channel(4);
         let (out_tx, _out_rx) = mpsc::channel(4);
         let cancel = CancellationToken::new();
+        let (ready_tx, ready_rx) = oneshot::channel();
 
-        let result = engine.run(audio_rx, out_tx, cancel).await;
+        let result = engine.run(audio_rx, out_tx, cancel, ready_tx).await;
 
         assert!(matches!(result, Err(TranscribeError::ModelNotFound(_))));
+        assert!(matches!(
+            ready_rx.await,
+            Ok(Err(TranscribeError::ModelNotFound(_)))
+        ));
     }
 
     /// 手動確認用: 実モデル・実音声で文字起こしが行われることを確認します。
@@ -185,7 +220,13 @@ mod tests {
         let cancel = CancellationToken::new();
 
         let child_cancel = cancel.clone();
-        let handle = tokio::spawn(async move { engine.run(audio_rx, out_tx, child_cancel).await });
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let handle =
+            tokio::spawn(async move { engine.run(audio_rx, out_tx, child_cancel, ready_tx).await });
+        ready_rx
+            .await
+            .expect("readyが送られること")
+            .expect("モデル初期化に成功すること");
 
         audio_tx
             .send(AudioFrame {

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::audio::AudioFrame;
@@ -36,7 +36,7 @@ pub struct TranscriptEvent {
 }
 
 /// 文字起こしエンジンのエラーです。
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum TranscribeError {
     /// モデルパスが設定画面等から指定されていない場合のエラーです。
     #[error("モデルが設定されていません: {0}")]
@@ -55,8 +55,10 @@ pub enum TranscribeError {
 /// 差し替え可能な文字起こしエンジンの共通インターフェースです。
 ///
 /// 実装は `run` 呼び出し時点でモデル未設定・不存在等の起動に必要な前提条件を検証し、
-/// 満たさない場合は音声を消費する前に即座に `Err` を返す必要があります
-/// （Fail-Fast、無音へのフォールバックは行いません）。
+/// 満たさない場合は音声を消費する前に即座に `ready` へ `Err` を送って戻る必要があります
+/// （Fail-Fast、無音へのフォールバックは行いません）。検証に成功した場合は `ready` へ
+/// `Ok(())` を送ってからメインループへ入ります。呼び出し元（[`EngineRunner::switch_to`]）
+/// はこの `ready` 通知を待つことで、初期化失敗を同期的に呼び出し元へ伝播できます。
 #[async_trait]
 pub trait TranscriptionEngine: Send + Sync {
     /// エンジンを一意に識別するID（例: `"whisper-local"`）。
@@ -70,6 +72,7 @@ pub trait TranscriptionEngine: Send + Sync {
         audio: broadcast::Receiver<AudioFrame>,
         out: mpsc::Sender<TranscriptEvent>,
         cancel: CancellationToken,
+        ready: oneshot::Sender<Result<(), TranscribeError>>,
     ) -> Result<(), TranscribeError>;
 }
 
@@ -95,19 +98,45 @@ impl EngineRunner {
     }
 
     /// 現在稼働中のエンジンを停止した上で、指定エンジンを起動します。
+    ///
+    /// エンジンの初期化（モデル検証・ロード等）が完了して `ready` 通知が届くまで待機し、
+    /// 初期化に失敗した場合はその `Err` をそのまま返します（Fail-Fast）。この場合
+    /// [`EngineRunner`] の状態は前のエンジンを停止したまま何も稼働していない状態になります。
     pub async fn switch_to(
         &mut self,
         engine: Arc<dyn TranscriptionEngine>,
         audio: broadcast::Receiver<AudioFrame>,
         out: mpsc::Sender<TranscriptEvent>,
-    ) {
+    ) -> Result<(), TranscribeError> {
         self.stop().await;
 
         let cancel = CancellationToken::new();
         let child_cancel = cancel.clone();
-        let handle = tokio::spawn(async move { engine.run(audio, out, child_cancel).await });
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let handle =
+            tokio::spawn(async move { engine.run(audio, out, child_cancel, ready_tx).await });
 
-        self.current = Some(RunningEngine { cancel, handle });
+        // `ready_rx` はエンジンが `run` 冒頭の初期化を終えた直後に解決される。
+        // 送信側がpanic等でdropされた場合は `RecvError` になるため、初期化失敗として扱う。
+        match ready_rx.await {
+            Ok(Ok(())) => {
+                self.current = Some(RunningEngine { cancel, handle });
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                let _ = handle.await;
+                Err(e)
+            }
+            Err(_) => {
+                let result = handle.await;
+                let message = match result {
+                    Ok(Err(e)) => e.to_string(),
+                    Ok(Ok(())) => "エンジンが準備完了通知を送らずに終了しました".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                Err(TranscribeError::InitFailed(message))
+            }
+        }
     }
 
     /// 稼働中のエンジンへ停止を通知し、タスクが終了するまで待機します。
@@ -148,7 +177,11 @@ mod tests {
             mut audio: broadcast::Receiver<AudioFrame>,
             out: mpsc::Sender<TranscriptEvent>,
             cancel: CancellationToken,
+            ready: oneshot::Sender<Result<(), TranscribeError>>,
         ) -> Result<(), TranscribeError> {
+            // モックエンジンは常に初期化に成功する。
+            let _ = ready.send(Ok(()));
+
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => {
@@ -184,7 +217,13 @@ mod tests {
         };
 
         let child_cancel = cancel.clone();
-        let handle = tokio::spawn(async move { engine.run(audio_rx, out_tx, child_cancel).await });
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let handle =
+            tokio::spawn(async move { engine.run(audio_rx, out_tx, child_cancel, ready_tx).await });
+        ready_rx
+            .await
+            .expect("readyが送られること")
+            .expect("初期化に成功すること");
 
         audio_tx
             .send(AudioFrame {
@@ -217,7 +256,9 @@ mod tests {
         };
 
         let child_cancel = cancel.clone();
-        let handle = tokio::spawn(async move { engine.run(audio_rx, out_tx, child_cancel).await });
+        let (ready_tx, _ready_rx) = oneshot::channel();
+        let handle =
+            tokio::spawn(async move { engine.run(audio_rx, out_tx, child_cancel, ready_tx).await });
 
         cancel.cancel();
         let result = handle.await.expect("タスクがpanicしないこと");
@@ -235,7 +276,10 @@ mod tests {
         });
 
         let mut runner = EngineRunner::new();
-        runner.switch_to(engine1, audio_rx1, out_tx1).await;
+        runner
+            .switch_to(engine1, audio_rx1, out_tx1)
+            .await
+            .expect("engine1の起動に成功すること");
 
         let (_audio_tx2, audio_rx2) = broadcast::channel(4);
         let (out_tx2, _out_rx2) = mpsc::channel(4);
@@ -246,7 +290,10 @@ mod tests {
 
         // switch_to は内部で前のエンジンの停止を待ってから次のエンジンを起動するため、
         // このawaitが完了した時点でengine1は確実に停止している。
-        runner.switch_to(engine2, audio_rx2, out_tx2).await;
+        runner
+            .switch_to(engine2, audio_rx2, out_tx2)
+            .await
+            .expect("engine2の起動に成功すること");
 
         assert!(
             stopped1.load(Ordering::SeqCst),
@@ -262,5 +309,43 @@ mod tests {
             stopped2.load(Ordering::SeqCst),
             "stop呼び出し後は新しいエンジンも停止すること"
         );
+    }
+
+    /// テスト用: 初期化（ready通知）に必ず失敗するエンジンです。
+    struct FailingEngine;
+
+    #[async_trait]
+    impl TranscriptionEngine for FailingEngine {
+        fn id(&self) -> &'static str {
+            "failing"
+        }
+
+        async fn run(
+            &self,
+            _audio: broadcast::Receiver<AudioFrame>,
+            _out: mpsc::Sender<TranscriptEvent>,
+            _cancel: CancellationToken,
+            ready: oneshot::Sender<Result<(), TranscribeError>>,
+        ) -> Result<(), TranscribeError> {
+            let err = TranscribeError::ModelNotConfigured("failing".to_string());
+            let _ = ready.send(Err(err.clone()));
+            Err(err)
+        }
+    }
+
+    #[tokio::test]
+    async fn 初期化に失敗した場合switch_toが_errを返すこと() {
+        let (_audio_tx, audio_rx) = broadcast::channel(4);
+        let (out_tx, _out_rx) = mpsc::channel(4);
+        let mut runner = EngineRunner::new();
+
+        let result = runner
+            .switch_to(Arc::new(FailingEngine), audio_rx, out_tx)
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(TranscribeError::ModelNotConfigured(_))
+        ));
     }
 }
