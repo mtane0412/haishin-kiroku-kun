@@ -127,6 +127,9 @@ describe('DeviceSelector', () => {
   })
 
   it('audio://level イベントを受信するとレベルメータの値が更新される', async () => {
+    // 描画ループ（requestAnimationFrame）はキャプチャ中のみ動作するため、
+    // 事前にキャプチャを開始しておく。
+    const user = userEvent.setup()
     let levelHandler: ((event: { payload: { rms: number } }) => void) | undefined
     mockedListen.mockImplementation(async (eventName, handler) => {
       if (eventName === 'audio://level') {
@@ -138,17 +141,76 @@ describe('DeviceSelector', () => {
       if (cmd === 'list_input_devices') {
         return デバイス一覧
       }
+      if (cmd === 'start_audio_capture') {
+        return undefined
+      }
       throw new Error(`予期しないコマンド: ${cmd}`)
     })
 
     render(<DeviceSelector />)
-    await screen.findByLabelText('入力デバイス')
+    await user.click(await screen.findByRole('button', { name: 'キャプチャ開始' }))
+    await screen.findByRole('button', { name: 'キャプチャ停止' })
 
     await waitFor(() => expect(levelHandler).toBeDefined())
     levelHandler?.({ payload: { rms: 0.42 } })
 
     const meter = await screen.findByRole('meter')
     await waitFor(() => expect(meter).toHaveAttribute('aria-valuenow', '0.42'))
+  })
+
+  it('同一フレーム内に複数のイベントが届いても、次の描画フレームでまとめて最新値が反映される', async () => {
+    // requestAnimationFrame を手動制御し、「イベント受信＝即setState」ではなく
+    // 「受信値はrefに保持し、描画フレームごとにまとめて反映する」実装になっている
+    // ことを検証する（高頻度イベントによる描画の詰まり・ラグを防ぐための設計）。
+    // 描画ループはキャプチャ中のみ動作するため、事前にキャプチャを開始しておく。
+    const rafCallbacks: FrameRequestCallback[] = []
+    const rafSpy = vi.fn((cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return rafCallbacks.length
+    })
+    vi.stubGlobal('requestAnimationFrame', rafSpy)
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const user = userEvent.setup()
+    let levelHandler: ((event: { payload: { rms: number } }) => void) | undefined
+    mockedListen.mockImplementation(async (eventName, handler) => {
+      if (eventName === 'audio://level') {
+        levelHandler = handler as (event: { payload: { rms: number } }) => void
+      }
+      return () => {}
+    })
+    mockedInvoke.mockImplementation(async (cmd) => {
+      if (cmd === 'list_input_devices') {
+        return デバイス一覧
+      }
+      if (cmd === 'start_audio_capture') {
+        return undefined
+      }
+      throw new Error(`予期しないコマンド: ${cmd}`)
+    })
+
+    try {
+      render(<DeviceSelector />)
+      await user.click(await screen.findByRole('button', { name: 'キャプチャ開始' }))
+      await screen.findByRole('button', { name: 'キャプチャ停止' })
+      await waitFor(() => expect(levelHandler).toBeDefined())
+      await waitFor(() => expect(rafCallbacks.length).toBeGreaterThan(0))
+
+      const meter = await screen.findByRole('meter')
+
+      // 同一フレーム内に2件届くが、次のフレームが来るまでDOMには反映されない
+      levelHandler?.({ payload: { rms: 0.1 } })
+      levelHandler?.({ payload: { rms: 0.5 } })
+      expect(meter).toHaveAttribute('aria-valuenow', '0')
+
+      // 次の描画フレームを手動で1つ進める
+      const nextFrame = rafCallbacks.shift()
+      nextFrame?.(performance.now())
+
+      await waitFor(() => expect(meter).toHaveAttribute('aria-valuenow', '0.5'))
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('invoke が失敗した場合にエラーメッセージが表示される', async () => {

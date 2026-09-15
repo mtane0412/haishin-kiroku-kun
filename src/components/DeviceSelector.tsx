@@ -3,10 +3,11 @@
  * Rust 側の `list_input_devices` / `start_audio_capture` / `stop_audio_capture` コマンドを
  * `invoke` で呼び出し、`audio://level` イベントを購読してRMSレベルを表示します。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { InputDeviceInfo } from '../types/audio'
+import { rmsToMeterRatio } from '../lib/meterScale'
 
 /** `audio://level` イベントのペイロードです。 */
 interface AudioLevelPayload {
@@ -30,6 +31,11 @@ function DeviceSelector() {
   const [isPending, setIsPending] = useState(false)
   const [level, setLevel] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // audio://level イベントの直近値を保持するrefです。イベント受信のたびに直接setLevelすると
+  // 音声コールバック頻度（数十〜百Hz）でReactの再描画が追いつかずラグ・更新停滞が
+  // 発生しうるため、値はrefにためておき、下のrequestAnimationFrameループで
+  // 描画フレームごとにまとめて反映します。
+  const levelRef = useRef(0)
 
   // マウント時にデバイス一覧を取得し、既定デバイスを初期選択します。
   useEffect(() => {
@@ -56,12 +62,13 @@ function DeviceSelector() {
     }
   }, [])
 
-  // レベルメータ用にRMSイベントを購読します。
+  // レベルメータ用にRMSイベントを購読します。値はrefに保持するのみで、
+  // Reactのstate更新（再描画）は行いません。
   useEffect(() => {
     let unlisten: (() => void) | undefined
     let ignore = false
     listen<AudioLevelPayload>('audio://level', (event) => {
-      setLevel(event.payload.rms)
+      levelRef.current = event.payload.rms
     })
       .then((fn) => {
         if (ignore) {
@@ -80,6 +87,23 @@ function DeviceSelector() {
       unlisten?.()
     }
   }, [])
+
+  // levelRefの最新値を、ブラウザの描画タイミング（requestAnimationFrame）に同期して
+  // Reactのstateへ反映します。描画フレームごとに最新値だけを反映することで、
+  // 高頻度イベントによる描画の詰まり・ラグを避けます。
+  // キャプチャ中のみループを回し、停止中は不要なrAF呼び出しを避けます。
+  useEffect(() => {
+    if (!isCapturing) {
+      return
+    }
+    let rafId: number
+    function tick() {
+      setLevel((prev) => (prev === levelRef.current ? prev : levelRef.current))
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [isCapturing])
 
   async function handleStart() {
     if (isPending) {
@@ -105,6 +129,7 @@ function DeviceSelector() {
     try {
       await invoke('stop_audio_capture')
       setIsCapturing(false)
+      levelRef.current = 0
       setLevel(0)
       setError(null)
     } catch (e) {
@@ -155,9 +180,26 @@ function DeviceSelector() {
         aria-valuemin={0}
         aria-valuemax={1}
         aria-valuenow={level}
+        style={{
+          width: '200px',
+          height: '12px',
+          border: '1px solid #888',
+          borderRadius: '4px',
+          overflow: 'hidden',
+          background: '#e0e0e0',
+        }}
       >
-        <div style={{ width: `${Math.min(level, 1) * 100}%` }} />
+        <div
+          style={{
+            width: '100%',
+            height: '100%',
+            background: '#396cd8',
+            transformOrigin: 'left',
+            transform: `scaleX(${rmsToMeterRatio(level)})`,
+          }}
+        />
       </div>
+      <p>入力レベル: {level.toFixed(3)}</p>
     </section>
   )
 }
